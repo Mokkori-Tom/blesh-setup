@@ -1,0 +1,16 @@
+# blerc
+
+# Set up fzf
+# Debian の fzf パッケージには shell/ 配下のファイルがないため、
+# モジュールが自動的に `fzf --bash` の出力を読み込む。
+ble-import -d integration/fzf-completion
+ble-import -d integration/fzf-key-bindings
+
+# Transient prompt: 実行後のプロンプトを ❯ だけに縮める（starship 使用時）
+if command -v starship >/dev/null; then
+  bleopt prompt_ps1_final='$(starship module character)'
+  bleopt prompt_rps1_final=''
+fi
+
+# fish 風: 複数の端末で履歴を即時共有する
+bleopt history_share=1
