@@ -6,7 +6,6 @@
 - 複数端末での履歴の即時共有（`bleopt history_share=1`）
 - fzf 連携: `C-r` 履歴検索 / `C-t` ファイル選択 / `M-c` ディレクトリ移動 / `**<Tab>` 補完
 - starship があればトランジェントプロンプト（実行後のプロンプトを `❯` だけに縮める）
-- starship の設定例: [`starship.toml`](starship.toml)（`setup.sh` では配置しないので、使うときは `~/.config/starship.toml` にコピーする）
 
 ## インストール
 
