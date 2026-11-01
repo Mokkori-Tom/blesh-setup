@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# ble.sh（fish 風の入力補完）と fzf 連携のセットアップ
+# ble.sh（fish 風の入力補完）と fzf 連携、starship のプロンプトのセットアップ
 #
 #   curl -fsSL https://raw.githubusercontent.com/Mokkori-Tom/blesh-setup/main/setup.sh | bash
 #
 # 何度実行しても同じ状態になる（2回目以降は ble.sh の更新として動く）。
 # 既存の設定は壊さない: 既にある ble.sh はその場所のまま更新し、
-# 中身の違う ~/.blerc は置き換えずに新しい版を横に置く。
+# 中身の違う ~/.blerc や ~/.config/starship.toml は置き換えずに新しい版を横に置く。
 # 環境変数:
 #   BLESH_DIR=~/ble.sh   ble.sh の clone 先（既存の ble.sh が無いときだけ使う）
 #   SKIP_PACKAGES=1      パッケージのインストールを飛ばす（sudo なしの環境向け）
-#   FORCE_BLERC=1        中身の違う ~/.blerc も退避してから置き換える
+#   SKIP_STARSHIP=1      starship の導入と設定を飛ばす
+#   FORCE_CONFIG=1       中身の違う ~/.blerc と starship.toml も退避してから置き換える
+#                        （FORCE_BLERC=1 も同じ意味）
 set -euo pipefail
 
 BLESH_DIR=${BLESH_DIR:-$HOME/ble.sh}
@@ -17,11 +19,14 @@ REPO_RAW=https://raw.githubusercontent.com/Mokkori-Tom/blesh-setup/main
 FZF_MIN=0.48.0
 BASHRC=$HOME/.bashrc
 BLERC=$HOME/.blerc
+STARSHIP_TOML=${STARSHIP_CONFIG:-$HOME/.config/starship.toml}
+FORCE_CONFIG=${FORCE_CONFIG:-${FORCE_BLERC-}}
 STAMP=$(date +%Y%m%d%H%M%S)
 
 BLESH_SRC=      # 読み込む ble.sh のパス
 BLESH_LINE=     # ~/.bashrc 内の既存の読み込み行
 FZF_LOCAL=      # ~/.fzf に fzf を入れたか
+STARSHIP_LOCAL= # ~/.local/bin に starship を入れたか
 
 info() { printf '\e[1;34m==>\e[m %s\n' "$*"; }
 warn() { printf '\e[1;33mwarn:\e[m %s\n' "$*" >&2; }
@@ -31,9 +36,12 @@ tilde() { printf '%s' "${1/#$HOME/\~}"; }
 # --- 1. 依存パッケージ ---------------------------------------------------------
 install_packages() {
   [[ ${SKIP_PACKAGES-} ]] && return
+  # starship は apt / dnf の公式リポジトリに無いので、それらでは ensure_starship で入れる
+  local starship=starship
+  [[ ${SKIP_STARSHIP-} ]] && starship=
   # Termux は apt-get も持つが sudo は無いので、apt より先に判定する
   if [[ ${TERMUX_VERSION-} || ${PREFIX-} == */com.termux/* ]]; then
-    pkg install -y git make gawk fzf
+    pkg install -y git make gawk fzf $starship
     return
   fi
   local sudo=
@@ -46,9 +54,9 @@ install_packages() {
   elif command -v dnf >/dev/null; then
     $sudo dnf install -y -q git make gawk fzf
   elif command -v pacman >/dev/null; then
-    $sudo pacman -S --needed --noconfirm git make gawk fzf
+    $sudo pacman -S --needed --noconfirm git make gawk fzf $starship
   elif command -v brew >/dev/null; then
-    brew install git make gawk fzf
+    brew install git make gawk fzf $starship
   else
     warn "パッケージマネージャが見つからない。git make gawk fzf を手動で入れてください"
   fi
@@ -77,7 +85,28 @@ ensure_fzf() {
   FZF_LOCAL=1
 }
 
-# --- 3. 既存の ble.sh を探す -----------------------------------------------------
+# --- 3. starship ---------------------------------------------------------------
+ensure_starship() {
+  [[ ${SKIP_STARSHIP-} ]] && return
+  command -v starship >/dev/null && return
+  if [[ -x $HOME/.local/bin/starship ]]; then # 前回入れたもの（PATH に無いだけ）
+    export PATH=$HOME/.local/bin:$PATH
+    STARSHIP_LOCAL=1
+    return
+  fi
+  info "starship が無いので公式のインストーラーで ~/.local/bin に入れます"
+  mkdir -p "$HOME/.local/bin"
+  local log
+  if log=$(curl -fsSL https://starship.rs/install.sh | sh -s -- -y -b "$HOME/.local/bin" 2>&1); then
+    export PATH=$HOME/.local/bin:$PATH
+    STARSHIP_LOCAL=1
+  else
+    printf '%s\n' "$log" | tail -20 | sed 's/^/    /' >&2
+    warn "starship を入れられませんでした。プロンプトは bash の既定のまま続けます"
+  fi
+}
+
+# --- 4. 既存の ble.sh を探す -----------------------------------------------------
 # ~/.bashrc が読み込んでいるもの > $BLESH_DIR > nightly 版の既定の場所 の順
 detect_blesh() {
   touch "$BASHRC"
@@ -105,7 +134,7 @@ detect_blesh() {
   fi
 }
 
-# --- 4. ble.sh の取得・更新 ------------------------------------------------------
+# --- 5. ble.sh の取得・更新 ------------------------------------------------------
 install_blesh() {
   if [[ $BLESH_SRC != */out/ble.sh ]]; then
     # make install や nightly 版で入れたもの: ble.sh 自身の更新処理に任せる
@@ -146,39 +175,50 @@ install_blesh() {
   info "ble.sh $(git -C "$dir" log -1 --format='%h (%cs)')"
 }
 
-# --- 5. ~/.blerc ---------------------------------------------------------------
-install_blerc() {
-  local src tmp
-  src=$(dirname "${BASH_SOURCE[0]:-}")/blerc
+# --- 6. 設定ファイル（~/.blerc, starship.toml） ---------------------------------
+# install_config <リポジトリ内の名前> <配置先>
+# 無ければ配置し、同じなら何もしない。中身が違えば置き換えずに <配置先>.blesh-setup を置く
+install_config() {
+  local name=$1 dest=$2 src tmp shown
+  shown=$(tilde "$dest")
+  src=$(dirname "${BASH_SOURCE[0]:-}")/$name
   tmp=$(mktemp)
   if [[ -f $src ]]; then
     cp "$src" "$tmp"
   else # curl | bash で実行されたとき
-    curl -fsSL "$REPO_RAW/blerc" -o "$tmp"
+    curl -fsSL "$REPO_RAW/$name" -o "$tmp" || die "$REPO_RAW/$name を取得できませんでした"
   fi
+  mkdir -p "$(dirname "$dest")"
 
-  if [[ ! -f $BLERC ]]; then
-    mv "$tmp" "$BLERC"
-    info "~/.blerc を配置しました"
-  elif cmp -s "$tmp" "$BLERC"; then
+  if [[ ! -f $dest ]]; then
+    mv "$tmp" "$dest"
+    info "$shown を配置しました"
+  elif cmp -s "$tmp" "$dest"; then
     rm -f "$tmp"
-  elif [[ ${FORCE_BLERC-} ]]; then
-    cp "$BLERC" "$BLERC.bak.$STAMP"
-    mv "$tmp" "$BLERC"
-    info "~/.blerc を置き換えました（元の版は ~/.blerc.bak.$STAMP）"
+  elif [[ $FORCE_CONFIG ]]; then
+    cp "$dest" "$dest.bak.$STAMP"
+    mv "$tmp" "$dest"
+    info "$shown を置き換えました（元の版は $shown.bak.$STAMP）"
   else
-    mv "$tmp" "$BLERC.blesh-setup"
-    warn "~/.blerc は手元の版と違うので置き換えません。新しい版は ~/.blerc.blesh-setup に置きました"
-    diff -u --label '~/.blerc' --label '~/.blerc.blesh-setup' "$BLERC" "$BLERC.blesh-setup" | sed 's/^/    /' >&2 || true
-    warn "取り込むなら手で反映するか、FORCE_BLERC=1 を付けて再実行してください"
-    grep -qE '^[^#]*fzf-key-bindings' "$BLERC" ||
-      warn "今の ~/.blerc では fzf 連携 (ble-import integration/fzf-key-bindings) が有効になっていません"
+    mv "$tmp" "$dest.blesh-setup"
+    warn "$shown は手元の版と違うので置き換えません。新しい版は $shown.blesh-setup に置きました"
+    diff -u --label "$shown" --label "$shown.blesh-setup" "$dest" "$dest.blesh-setup" | sed 's/^/    /' >&2 || true
+    warn "取り込むなら手で反映するか、FORCE_CONFIG=1 を付けて再実行してください"
+    return 1
   fi
 }
 
-# --- 6. ~/.bashrc ----------------------------------------------------------------
+install_configs() {
+  if ! install_config blerc "$BLERC"; then
+    grep -qE '^[^#]*fzf-key-bindings' "$BLERC" ||
+      warn "今の ~/.blerc では fzf 連携 (ble-import integration/fzf-key-bindings) が有効になっていません"
+  fi
+  [[ ${SKIP_STARSHIP-} ]] || install_config starship.toml "$STARSHIP_TOML" || true
+}
+
+# --- 7. ~/.bashrc ----------------------------------------------------------------
 install_bashrc() {
-  local head= need_attach=
+  local head= need_attach= starship_init=
 
   if [[ ! $BLESH_LINE ]]; then
     head+="[[ \$- == *i* ]] && source $(tilde "$BLESH_SRC") --noattach"$'\n'
@@ -193,8 +233,15 @@ install_bashrc() {
   if [[ $FZF_LOCAL ]] && ! grep -qE '^[^#]*\.fzf/bin' "$BASHRC"; then
     head='[[ -d ~/.fzf/bin ]] && PATH=~/.fzf/bin:$PATH'$'\n'$head
   fi
+  if [[ $STARSHIP_LOCAL ]] && ! grep -qE '^[^#]*\.local/bin' "$BASHRC"; then
+    head='[[ -d ~/.local/bin ]] && PATH=~/.local/bin:$PATH'$'\n'$head
+  fi
+  # starship の初期化は ble.sh を読み込んだ後、ble-attach より前に置く
+  if [[ ! ${SKIP_STARSHIP-} ]] && ! grep -qE '^[^#]*starship init bash' "$BASHRC"; then
+    starship_init='command -v starship >/dev/null && eval "$(starship init bash)"'
+  fi
 
-  if [[ $head || $need_attach ]]; then
+  if [[ $head || $need_attach || $starship_init ]]; then
     cp "$BASHRC" "$BASHRC.bak.$STAMP"
     info "~/.bashrc を ~/.bashrc.bak.$STAMP に退避"
     {
@@ -202,9 +249,18 @@ install_bashrc() {
       if [[ $head ]]; then
         printf '# >>> blesh-setup >>>\n%s# <<< blesh-setup <<<\n\n' "$head"
       fi
-      cat "$BASHRC"
-      if [[ $need_attach ]]; then
-        printf '\n# >>> blesh-setup >>>\n((_ble_bash)) && ble-attach\n# <<< blesh-setup <<<\n'
+      if [[ $starship_init && ! $need_attach ]] && grep -qE '^[^#]*ble-attach' "$BASHRC"; then
+        # 既存の ble-attach の直前に差し込む
+        BLOCK="# >>> blesh-setup >>>"$'\n'"$starship_init"$'\n'"# <<< blesh-setup <<<" \
+          awk '!done && /^[^#]*ble-attach/ { print ENVIRON["BLOCK"]; done = 1 } { print }' "$BASHRC"
+      else
+        cat "$BASHRC"
+        if [[ $starship_init || $need_attach ]]; then
+          printf '\n# >>> blesh-setup >>>\n'
+          [[ ! $starship_init ]] || printf '%s\n' "$starship_init"
+          [[ ! $need_attach ]] || printf '((_ble_bash)) && ble-attach\n'
+          printf '# <<< blesh-setup <<<\n'
+        fi
       fi
     } >"$BASHRC.tmp.$STAMP"
     mv "$BASHRC.tmp.$STAMP" "$BASHRC"
@@ -225,9 +281,10 @@ install_bashrc() {
 main() {
   install_packages
   ensure_fzf
+  ensure_starship
   detect_blesh
   install_blesh
-  install_blerc
+  install_configs
   install_bashrc
   info "完了。'exec bash' で反映されます"
 }
