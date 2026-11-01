@@ -23,8 +23,16 @@ die() { printf '\e[1;31merror:\e[m %s\n' "$*" >&2; exit 1; }
 # --- 1. 依存パッケージ ---------------------------------------------------------
 install_packages() {
   [[ ${SKIP_PACKAGES-} ]] && return
+  # Termux は apt-get も持つが sudo は無いので、apt より先に判定する
+  if [[ ${TERMUX_VERSION-} || ${PREFIX-} == */com.termux/* ]]; then
+    pkg install -y git make gawk fzf
+    return
+  fi
   local sudo=
-  ((EUID == 0)) || sudo=sudo
+  if ((EUID != 0)); then
+    command -v sudo >/dev/null || die "sudo がありません。root で実行するか SKIP_PACKAGES=1 を付けて git make gawk fzf を手動で入れてください"
+    sudo=sudo
+  fi
   if command -v apt-get >/dev/null; then
     $sudo apt-get update -qq && $sudo apt-get install -y -qq git make gawk fzf
   elif command -v dnf >/dev/null; then
@@ -33,8 +41,6 @@ install_packages() {
     $sudo pacman -S --needed --noconfirm git make gawk fzf
   elif command -v brew >/dev/null; then
     brew install git make gawk fzf
-  elif command -v pkg >/dev/null; then # Termux
-    pkg install -y git make gawk fzf
   else
     warn "パッケージマネージャが見つからない。git make gawk fzf を手動で入れてください"
   fi

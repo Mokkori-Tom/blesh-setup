@@ -23,7 +23,7 @@ git clone https://github.com/Mokkori-Tom/blesh-setup.git && ./blesh-setup/setup.
 
 ## スクリプトがすること
 
-1. `git make gawk fzf` を入れる（apt / dnf / pacman / brew / Termux の pkg に対応）
+1. `git make gawk fzf` を入れる（apt / dnf / pacman / brew / Termux の pkg に対応。Termux では sudo を使わない）
 2. fzf が 0.48 未満なら `~/.fzf` に最新版を入れる（`fzf --bash` が必要なため）
 3. ble.sh を `~/ble.sh` に clone してビルド（既にあれば更新）
 4. [`blerc`](blerc) を `~/.blerc` に配置
