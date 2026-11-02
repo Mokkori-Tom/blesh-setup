@@ -47,24 +47,25 @@ install_packages() {
   [[ ${SKIP_TMUX-} ]] && tmux=
   # Termux は apt-get も持つが sudo は無いので、apt より先に判定する
   if [[ ${TERMUX_VERSION-} || ${PREFIX-} == */com.termux/* ]]; then
-    pkg install -y git make gawk fzf $starship $tmux
+    pkg install -y git make gawk curl fzf $starship $tmux
     return
   fi
+  # curl は fzf が古いとき(Debian 12 は 0.38)に ~/.fzf へ最新版を取るのと、starship の導入に使う
   local sudo=
   if ((EUID != 0)); then
-    command -v sudo >/dev/null || die "sudo がありません。root で実行するか SKIP_PACKAGES=1 を付けて git make gawk fzf を手動で入れてください"
+    command -v sudo >/dev/null || die "sudo がありません。root で実行するか SKIP_PACKAGES=1 を付けて git make gawk curl fzf を手動で入れてください"
     sudo=sudo
   fi
   if command -v apt-get >/dev/null; then
-    $sudo apt-get update -qq && $sudo apt-get install -y -qq git make gawk fzf $tmux
+    $sudo apt-get update -qq && $sudo apt-get install -y -qq git make gawk curl fzf $tmux
   elif command -v dnf >/dev/null; then
-    $sudo dnf install -y -q git make gawk fzf $tmux
+    $sudo dnf install -y -q git make gawk curl fzf $tmux
   elif command -v pacman >/dev/null; then
-    $sudo pacman -S --needed --noconfirm git make gawk fzf $starship $tmux
+    $sudo pacman -S --needed --noconfirm git make gawk curl fzf $starship $tmux
   elif command -v brew >/dev/null; then
-    brew install git make gawk fzf $starship $tmux
+    brew install git make gawk curl fzf $starship $tmux
   else
-    warn "パッケージマネージャが見つからない。git make gawk fzf を手動で入れてください"
+    warn "パッケージマネージャが見つからない。git make gawk curl fzf を手動で入れてください"
   fi
 }
 
@@ -79,6 +80,8 @@ fzf_ok() {
 ensure_fzf() {
   fzf_ok && return
   info "fzf が無いか古いので ~/.fzf に最新版を入れます"
+  command -v curl >/dev/null || command -v wget >/dev/null ||
+    die "fzf $FZF_MIN 以上が要りますが、取ってくるための curl も wget もありません。curl を入れてから実行し直してください"
   if [[ -d $HOME/.fzf/.git ]]; then
     git -C "$HOME/.fzf" pull --ff-only -q
   else
