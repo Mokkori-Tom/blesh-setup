@@ -10,7 +10,8 @@
 #   BLESH_DIR=~/ble.sh   ble.sh の clone 先（既存の ble.sh が無いときだけ使う）
 #   SKIP_PACKAGES=1      パッケージのインストールを飛ばす（sudo なしの環境向け）
 #   SKIP_STARSHIP=1      starship の導入と設定を飛ばす
-#   FORCE_CONFIG=1       中身の違う ~/.blerc と starship.toml も退避してから置き換える
+#   SKIP_TMUX=1          tmux の導入と設定を飛ばす
+#   FORCE_CONFIG=1       中身の違う ~/.blerc・starship.toml・tmux.conf も退避してから置き換える
 #                        （FORCE_BLERC=1 も同じ意味）
 set -euo pipefail
 
@@ -20,6 +21,9 @@ FZF_MIN=0.48.0
 BASHRC=$HOME/.bashrc
 BLERC=$HOME/.blerc
 STARSHIP_TOML=${STARSHIP_CONFIG:-$HOME/.config/starship.toml}
+# tmux は ~/.config/tmux/tmux.conf があればそちらを読む
+TMUX_CONF=$HOME/.tmux.conf
+[[ -f $HOME/.config/tmux/tmux.conf && ! -f $TMUX_CONF ]] && TMUX_CONF=$HOME/.config/tmux/tmux.conf
 FORCE_CONFIG=${FORCE_CONFIG:-${FORCE_BLERC-}}
 STAMP=$(date +%Y%m%d%H%M%S)
 
@@ -39,9 +43,11 @@ install_packages() {
   # starship は apt / dnf の公式リポジトリに無いので、それらでは ensure_starship で入れる
   local starship=starship
   [[ ${SKIP_STARSHIP-} ]] && starship=
+  local tmux=tmux
+  [[ ${SKIP_TMUX-} ]] && tmux=
   # Termux は apt-get も持つが sudo は無いので、apt より先に判定する
   if [[ ${TERMUX_VERSION-} || ${PREFIX-} == */com.termux/* ]]; then
-    pkg install -y git make gawk fzf $starship
+    pkg install -y git make gawk fzf $starship $tmux
     return
   fi
   local sudo=
@@ -50,13 +56,13 @@ install_packages() {
     sudo=sudo
   fi
   if command -v apt-get >/dev/null; then
-    $sudo apt-get update -qq && $sudo apt-get install -y -qq git make gawk fzf
+    $sudo apt-get update -qq && $sudo apt-get install -y -qq git make gawk fzf $tmux
   elif command -v dnf >/dev/null; then
-    $sudo dnf install -y -q git make gawk fzf
+    $sudo dnf install -y -q git make gawk fzf $tmux
   elif command -v pacman >/dev/null; then
-    $sudo pacman -S --needed --noconfirm git make gawk fzf $starship
+    $sudo pacman -S --needed --noconfirm git make gawk fzf $starship $tmux
   elif command -v brew >/dev/null; then
-    brew install git make gawk fzf $starship
+    brew install git make gawk fzf $starship $tmux
   else
     warn "パッケージマネージャが見つからない。git make gawk fzf を手動で入れてください"
   fi
@@ -175,7 +181,7 @@ install_blesh() {
   info "ble.sh $(git -C "$dir" log -1 --format='%h (%cs)')"
 }
 
-# --- 6. 設定ファイル（~/.blerc, starship.toml） ---------------------------------
+# --- 6. 設定ファイル（~/.blerc, starship.toml, tmux.conf） ---------------------------------
 # install_config <リポジトリ内の名前> <配置先>
 # 無ければ配置し、同じなら何もしない。中身が違えば置き換えずに <配置先>.blesh-setup を置く
 install_config() {
@@ -214,6 +220,12 @@ install_configs() {
       warn "今の ~/.blerc では fzf 連携 (ble-import integration/fzf-key-bindings) が有効になっていません"
   fi
   [[ ${SKIP_STARSHIP-} ]] || install_config starship.toml "$STARSHIP_TOML" || true
+  if [[ ! ${SKIP_TMUX-} ]] && install_config tmux.conf "$TMUX_CONF"; then
+    # 動いている tmux にもすぐ効かせる（新しく開くセッションは自動で読む）
+    if [[ ${TMUX-} ]] || tmux info >/dev/null 2>&1; then
+      tmux source-file "$TMUX_CONF" 2>/dev/null && info "動いている tmux に $(tilde "$TMUX_CONF") を読み込ませました"
+    fi
+  fi
 }
 
 # --- 7. ~/.bashrc ----------------------------------------------------------------
